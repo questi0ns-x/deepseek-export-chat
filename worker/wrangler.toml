@@ -1,0 +1,7 @@
+name = "deepseek-share-proxy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Limita el uso a tu web. Cambia por tu URL real de GitHub Pages (sin barra final).
+ALLOWED_ORIGIN = "https://questi0ns-x.github.io"
