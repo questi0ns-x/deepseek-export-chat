@@ -1,18 +1,23 @@
-import { useState } from 'react'
-import { Check, Copy, Download } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronDown, Copy, Download, MessagesSquare, Waypoints } from 'lucide-react'
 import { BlurFade } from '@/components/ui/blur-fade'
 import { BorderBeam } from '@/components/ui/border-beam'
 import { DotPattern } from '@/components/ui/dot-pattern'
 import { MagicCard } from '@/components/ui/magic-card'
 import { ShimmerButton } from '@/components/ui/shimmer-button'
-import { TextAnimate } from '@/components/ui/text-animate'
+import { ChatView } from '@/components/ChatView'
+import { RelayBeam } from '@/components/RelayBeam'
 import { cn } from '@/lib/utils'
 import {
   DEFAULT_PROXY,
-  downloadMd,
+  FORMATS,
+  downloadFile,
   fetchShare,
+  parseChat,
   parseId,
-  toMarkdown,
+  render,
+  type Chat,
+  type Format,
   type Options,
 } from '@/lib/deepseek'
 
@@ -32,7 +37,32 @@ function save(key: string, value: string) {
 }
 
 const field =
-  'w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-indigo-400/60'
+  'w-full rounded-xl border border-line bg-ink/70 px-4 py-3 text-[0.95rem] text-paper placeholder:text-fog/70 outline-none transition-colors focus:border-ds'
+
+function Switch({ checked, onChange, label, hint }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-4 rounded-lg px-1 py-2 text-left hover:bg-white/[0.03]"
+    >
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-fog">{hint}</span>
+      </span>
+      <span className={cn('relative h-6 w-10 shrink-0 rounded-full border transition-colors', checked ? 'border-ds bg-ds' : 'border-line bg-ink')}>
+        <span className={cn('absolute top-0.5 size-4.5 rounded-full bg-white transition-all', checked ? 'left-[1.15rem]' : 'left-0.5')} />
+      </span>
+    </button>
+  )
+}
+
+function initialFormat(): Format {
+  const f = load('fmt', 'md')
+  return f in FORMATS ? (f as Format) : 'md'
+}
 
 export default function App() {
   const [url, setUrl] = useState('')
@@ -42,38 +72,44 @@ export default function App() {
     refs: load('refs2', '1') === '1',
     preamble: load('pre2', '1') === '1',
   })
+  const [format, setFormat] = useState<Format>(initialFormat)
   const [raw, setRaw] = useState('')
+  const [chat, setChat] = useState<Chat | null>(null)
+  const [tab, setTab] = useState<'chat' | 'file'>('chat')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<{ text: string; err?: boolean }>({ text: '' })
-  const [result, setResult] = useState<{ title: string; md: string } | null>(null)
   const [copied, setCopied] = useState(false)
-  const [showOpts, setShowOpts] = useState(false)
+  const [adv, setAdv] = useState(false)
 
-  function render(json: unknown) {
-    const r = toMarkdown(json, opts)
-    setResult(r)
-    setMsg({ text: `Listo: ${r.md.length} caracteres.` })
+  const viewer = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (chat && window.innerWidth < 1024) viewer.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [chat])
+
+  const output = useMemo(() => (chat ? render(chat, format, opts) : ''), [chat, format, opts])
+  const tokens = Math.round(output.length / 4)
+
+  function setOpt<K extends keyof Options>(k: K, v: Options[K]) {
+    const next = { ...opts, [k]: v }
+    setOpts(next)
+    save('think2', next.think ? '1' : '0')
+    save('refs2', next.refs ? '1' : '0')
+    save('pre2', next.preamble ? '1' : '0')
   }
 
   async function go() {
     const id = parseId(url)
-    if (!id) return setMsg({ text: 'Link no válido.', err: true })
+    if (!id) return setMsg({ text: 'Ese link no parece de chat.deepseek.com/share/…', err: true })
     save('proxy', proxy.trim())
-    save('think2', opts.think ? '1' : '0')
-    save('refs2', opts.refs ? '1' : '0')
-    save('pre2', opts.preamble ? '1' : '0')
     setLoading(true)
-    setMsg({ text: 'Cargando…' })
+    setMsg({ text: '' })
     try {
-      render(await fetchShare(id, proxy))
+      setChat(parseChat(await fetchShare(id, proxy)))
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e)
       const cors = !proxy.trim() || /Failed to fetch|NetworkError/i.test(m)
-      setMsg({
-        text: 'Error: ' + m + (cors ? ' (CORS: configura el proxy en Opciones o usa el plan B)' : ''),
-        err: true,
-      })
-      setShowOpts(true)
+      setMsg({ text: m + (cors ? '. El navegador bloquea la llamada directa: revisa el proxy en Avanzado o usa el plan B.' : ''), err: true })
+      setAdv(true)
     } finally {
       setLoading(false)
     }
@@ -81,168 +117,202 @@ export default function App() {
 
   function convertRaw() {
     try {
-      render(JSON.parse(raw))
+      setChat(parseChat(JSON.parse(raw)))
+      setMsg({ text: '' })
     } catch (e) {
       setMsg({ text: 'JSON inválido: ' + (e instanceof Error ? e.message : e), err: true })
     }
   }
 
   async function copy() {
-    if (!result) return
     try {
-      await navigator.clipboard.writeText(result.md)
+      await navigator.clipboard.writeText(output)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
-      setMsg({ text: 'No se pudo copiar.', err: true })
+      setMsg({ text: 'No se pudo copiar al portapapeles.', err: true })
     }
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-zinc-950 text-zinc-100">
-      <DotPattern className="fill-zinc-700/40 [mask-image:radial-gradient(600px_circle_at_center,white,transparent)]" />
-      <main className="relative mx-auto max-w-3xl px-4 py-16">
-        <BlurFade delay={0.05}>
-          <TextAnimate
-            by="word"
-            animation="blurInUp"
-            as="h1"
-            className="text-center text-4xl font-bold tracking-tight sm:text-5xl"
-          >
-            DeepSeek Chat a Markdown
-          </TextAnimate>
-          <p className="mt-3 text-center text-zinc-400">
-            Pega un link público de DeepSeek y descarga la conversación como .md
-          </p>
-        </BlurFade>
+    <div className="relative min-h-screen overflow-x-clip">
+      <DotPattern className="fill-line/70 [mask-image:radial-gradient(900px_circle_at_20%_10%,white,transparent_70%)]" />
+      <div className="pointer-events-none absolute -top-40 left-1/4 h-96 w-[40rem] -translate-x-1/2 rounded-full bg-ds/20 blur-[120px]" />
 
-        <BlurFade delay={0.2}>
-          <MagicCard className="mt-10 rounded-xl" gradientColor="#262626">
-            <div className="relative space-y-4 p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <input
-                  className={field}
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && go()}
-                  placeholder="https://chat.deepseek.com/share/xxxxxxxx"
-                  autoComplete="off"
-                />
+      <div className="relative mx-auto grid max-w-7xl gap-8 px-5 py-8 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-10 lg:py-12">
+        {/* LEFT: controls */}
+        <section className="lg:sticky lg:top-8 lg:self-start">
+          <BlurFade>
+            <div className="mb-8 flex items-center gap-2 text-sm font-semibold tracking-tight">
+              <Waypoints size={18} className="text-ds-soft" /> retomar
+              <span className="font-normal text-fog">· DeepSeek share a archivo</span>
+            </div>
+            <h1 className="text-balance text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl">
+              Tu chat se llenó. <span className="text-amber">Retómalo</span> en una sesión nueva.
+            </h1>
+            <p className="mt-4 max-w-md text-pretty text-fog">
+              Pega el link público del chat y descarga una transcripción lista para pegar como contexto, con quién dijo qué y los adjuntos marcados.
+            </p>
+          </BlurFade>
+
+          <BlurFade delay={0.15} className="my-8">
+            <RelayBeam />
+          </BlurFade>
+
+          <BlurFade delay={0.25}>
+            <MagicCard className="rounded-2xl" gradientColor="#1b2033" gradientFrom="#4d6bfe" gradientTo="#ffb547">
+              <div className="space-y-4 p-5">
+                <label className="block">
+                  <span className="mb-2 block text-sm font-medium">Link del chat compartido</span>
+                  <input
+                    className={field}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && go()}
+                    placeholder="https://chat.deepseek.com/share/…"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+
                 <ShimmerButton
                   onClick={go}
                   disabled={loading}
-                  background="rgba(79,70,229,1)"
-                  className="shrink-0 disabled:opacity-60"
+                  background="#4d6bfe"
+                  shimmerColor="#dbe3ff"
+                  borderRadius="12px"
+                  className="w-full py-3 text-[0.95rem] font-semibold disabled:opacity-60"
                 >
-                  <span className="text-sm font-medium">{loading ? 'Cargando…' : 'Cargar'}</span>
+                  {loading ? 'Cargando chat…' : 'Cargar chat'}
                 </ShimmerButton>
-              </div>
 
-              <p
-                role="status"
-                className={cn('min-h-5 text-sm', msg.err ? 'text-red-400' : 'text-zinc-400')}
-              >
-                {msg.text}
-              </p>
+                {msg.text && (
+                  <p role="alert" className={cn('text-sm', msg.err ? 'text-red-300' : 'text-fog')}>
+                    {msg.text}
+                  </p>
+                )}
 
-              <button
-                type="button"
-                onClick={() => setShowOpts((s) => !s)}
-                className="text-sm text-zinc-400 hover:text-zinc-200"
-              >
-                {showOpts ? '▾' : '▸'} Opciones y plan B
-              </button>
-
-              {showOpts && (
-                <div className="space-y-4 rounded-lg border border-white/10 p-4">
-                  <label className="block text-sm text-zinc-400">
-                    URL del proxy (Cloudflare Worker)
-                    <input
-                      className={cn(field, 'mt-1')}
-                      value={proxy}
-                      onChange={(e) => setProxy(e.target.value)}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={opts.preamble}
-                      onChange={(e) => setOpts({ ...opts, preamble: e.target.checked })}
-                    />
-                    Prefacio de contexto para continuar en otra sesión
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={opts.think}
-                      onChange={(e) => setOpts({ ...opts, think: e.target.checked })}
-                    />
-                    Incluir razonamiento
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={opts.refs}
-                      onChange={(e) => setOpts({ ...opts, refs: e.target.checked })}
-                    />
-                    Incluir fuentes de búsqueda
-                  </label>
-                  <div>
-                    <p className="mb-1 text-sm text-zinc-400">
-                      Plan B: pega aquí el JSON de /api/v0/share/content?share_id=ID
-                    </p>
-                    <textarea
-                      className={cn(field, 'min-h-28 font-mono text-xs')}
-                      value={raw}
-                      onChange={(e) => setRaw(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={convertRaw}
-                      className="mt-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
-                    >
-                      Convertir JSON
-                    </button>
-                  </div>
+                <div className="divide-y divide-line/70 border-t border-line pt-1">
+                  <Switch checked={opts.preamble} onChange={(v) => setOpt('preamble', v)} label="Prefacio de contexto" hint="Explica a la nueva sesión cómo leer el archivo" />
+                  <Switch checked={opts.refs} onChange={(v) => setOpt('refs', v)} label="Fuentes de búsqueda" hint="Enlaces que usó la IA" />
+                  <Switch checked={opts.think} onChange={(v) => setOpt('think', v)} label="Razonamiento" hint="Gasta mucho contexto; suele sobrar" />
                 </div>
-              )}
-            </div>
-          </MagicCard>
-        </BlurFade>
 
-        {result && (
-          <BlurFade delay={0.05} inView>
-            <div className="relative mt-8 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/60 p-5">
-              <BorderBeam size={160} duration={8} />
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="truncate font-medium">{result.title}</h2>
-                <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdv((s) => !s)}
+                  aria-expanded={adv}
+                  className="flex items-center gap-1.5 text-sm text-fog hover:text-paper"
+                >
+                  <ChevronDown size={14} className={cn('transition-transform', adv && 'rotate-180')} /> Avanzado y plan B
+                </button>
+                {adv && (
+                  <div className="space-y-4 rounded-xl border border-line bg-ink/50 p-4">
+                    <label className="block text-sm text-fog">
+                      URL del proxy (Cloudflare Worker)
+                      <input className={cn(field, 'mt-1.5 text-sm')} value={proxy} onChange={(e) => setProxy(e.target.value)} />
+                    </label>
+                    <div>
+                      <p className="mb-1.5 text-sm text-fog">
+                        Plan B: abre <span className="font-mono text-xs">/api/v0/share/content?share_id=ID</span> en DeepSeek y pega el JSON.
+                      </p>
+                      <textarea className={cn(field, 'min-h-24 font-mono text-xs')} value={raw} onChange={(e) => setRaw(e.target.value)} />
+                      <button type="button" onClick={convertRaw} className="mt-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-white/5">
+                        Convertir JSON
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </MagicCard>
+          </BlurFade>
+        </section>
+
+        {/* RIGHT: viewer */}
+        <section ref={viewer} className="min-w-0 scroll-mt-4">
+          <BlurFade delay={0.35}>
+            <div className="relative overflow-hidden rounded-2xl border border-line bg-panel/90 shadow-[0_30px_80px_-30px_rgb(0_0_0/0.9)]">
+              {chat && <BorderBeam size={220} duration={9} colorFrom="#4d6bfe" colorTo="#ffb547" />}
+
+              <header className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
+                <div className="flex rounded-lg border border-line bg-ink/70 p-0.5" role="tablist" aria-label="Vista">
+                  {(['chat', 'file'] as const).map((k) => (
+                    <button
+                      key={k}
+                      role="tab"
+                      aria-selected={tab === k}
+                      onClick={() => setTab(k)}
+                      className={cn('rounded-md px-3 py-1.5 text-sm transition-colors', tab === k ? 'bg-raise text-paper' : 'text-fog hover:text-paper')}
+                    >
+                      {k === 'chat' ? 'Chat' : 'Archivo'}
+                    </button>
+                  ))}
+                </div>
+
+                {chat && (
+                  <p className="tnum text-sm text-fog">
+                    <span className="text-paper">{chat.turns.length}</span> mensajes · ~<span className="text-paper">{tokens.toLocaleString('es')}</span> tokens
+                  </p>
+                )}
+
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <div className="flex rounded-lg border border-line bg-ink/70 p-0.5" role="radiogroup" aria-label="Formato">
+                    {(Object.keys(FORMATS) as Format[]).map((f) => (
+                      <button
+                        key={f}
+                        role="radio"
+                        aria-checked={format === f}
+                        onClick={() => {
+                          setFormat(f)
+                          save('fmt', f)
+                          if (chat) setTab('file')
+                        }}
+                        className={cn('rounded-md px-2.5 py-1.5 font-mono text-xs uppercase transition-colors', format === f ? 'bg-ds text-white' : 'text-fog hover:text-paper')}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     type="button"
                     onClick={copy}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
+                    disabled={!chat}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40"
                   >
                     {copied ? <Check size={14} /> : <Copy size={14} />}
                     {copied ? 'Copiado' : 'Copiar'}
                   </button>
                   <ShimmerButton
-                    onClick={() => downloadMd(result.title, result.md)}
-                    background="rgba(79,70,229,1)"
-                    className="px-4 py-1.5"
+                    disabled={!chat}
+                    onClick={() => chat && downloadFile(chat.title, output, format)}
+                    background="#4d6bfe"
+                    shimmerColor="#dbe3ff"
+                    borderRadius="10px"
+                    className="px-4 py-2 text-sm font-semibold disabled:opacity-40"
                   >
-                    <span className="inline-flex items-center gap-1.5 text-sm">
-                      <Download size={14} /> Descargar .md
-                    </span>
+                    <Download size={14} className="mr-1.5" /> Descargar .{format}
                   </ShimmerButton>
                 </div>
+              </header>
+
+              <div className="h-[min(72vh,52rem)] min-h-[26rem] overflow-y-auto px-4 py-6 sm:px-6">
+                {!chat ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+                    <MessagesSquare size={36} className="text-fog/60" />
+                    <p className="max-w-xs text-pretty text-fog">
+                      El chat aparecerá aquí, con tus mensajes y los de la IA separados. Pega un link y pulsa Cargar chat.
+                    </p>
+                  </div>
+                ) : tab === 'chat' ? (
+                  <ChatView chat={chat} o={opts} />
+                ) : (
+                  <pre className="whitespace-pre-wrap break-words font-mono text-[0.8rem] leading-relaxed text-paper/90">{output}</pre>
+                )}
               </div>
-              <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/40 p-4 font-mono text-xs leading-relaxed text-zinc-300">
-                {result.md}
-              </pre>
             </div>
           </BlurFade>
-        )}
-      </main>
+        </section>
+      </div>
     </div>
   )
 }
