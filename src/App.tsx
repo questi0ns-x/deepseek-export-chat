@@ -117,7 +117,7 @@ export default function App() {
         <BlurFade delay={0.2}>
           <MagicCard className="mt-10 rounded-xl" gradientColor="#262626">
             <div className="relative space-y-4 p-5">
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <input
                   className={field}
                   value={url}
