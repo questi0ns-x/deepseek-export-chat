@@ -38,8 +38,9 @@ export default function App() {
   const [url, setUrl] = useState('')
   const [proxy, setProxy] = useState(load('proxy', DEFAULT_PROXY))
   const [opts, setOpts] = useState<Options>({
-    think: load('think', '1') === '1',
-    refs: load('refs', '1') === '1',
+    think: load('think2', '0') === '1',
+    refs: load('refs2', '1') === '1',
+    preamble: load('pre2', '1') === '1',
   })
   const [raw, setRaw] = useState('')
   const [loading, setLoading] = useState(false)
@@ -58,8 +59,9 @@ export default function App() {
     const id = parseId(url)
     if (!id) return setMsg({ text: 'Link no válido.', err: true })
     save('proxy', proxy.trim())
-    save('think', opts.think ? '1' : '0')
-    save('refs', opts.refs ? '1' : '0')
+    save('think2', opts.think ? '1' : '0')
+    save('refs2', opts.refs ? '1' : '0')
+    save('pre2', opts.preamble ? '1' : '0')
     setLoading(true)
     setMsg({ text: 'Cargando…' })
     try {
@@ -160,6 +162,14 @@ export default function App() {
                       value={proxy}
                       onChange={(e) => setProxy(e.target.value)}
                     />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={opts.preamble}
+                      onChange={(e) => setOpts({ ...opts, preamble: e.target.checked })}
+                    />
+                    Prefacio de contexto para continuar en otra sesión
                   </label>
                   <label className="flex items-center gap-2 text-sm text-zinc-300">
                     <input
